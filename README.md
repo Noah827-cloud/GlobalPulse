@@ -39,6 +39,27 @@ An intelligent news aggregator powered by Google Gemini, capable of fetching, su
    npm run build
    ```
 
+## 🌐 Deployment (Publish to Internet)
+
+The easiest way to deploy this app is using **Vercel** (recommended for Vite/React apps).
+
+### Step 1: Push to GitHub
+Ensure your latest code is pushed to your GitHub repository (you just did this).
+
+### Step 2: Deploy on Vercel
+1. Go to [Vercel.com](https://vercel.com) and sign up/login.
+2. Click **"Add New..."** -> **"Project"**.
+3. Import your `GlobalPulse` repository.
+4. **Crucial Step**: In the "Environment Variables" section, add:
+   - **Name**: `VITE_API_KEY`
+   - **Value**: Your Google Gemini API Key (starts with `AIza...`)
+5. Click **Deploy**.
+
+Vercel will build your site and give you a public URL (e.g., `https://globalpulse-news.vercel.app`) that you can share with anyone.
+
+### Alternative: Netlify
+Similar process: Connect GitHub -> Select Repo -> Set `VITE_API_KEY` in "Site settings" -> Deploy.
+
 ## 🧩 Recent Updates
 
 - **Fixed**: React "Duplicate Key" crash caused by base64 ID collisions.
