@@ -1,0 +1,7 @@
+{
+  "name": "GlobalPulse News Aggregator",
+  "description": "A modern, high-performance news aggregator for global politics, finance, and AI, powered by Gemini Search Grounding for real-time updates and professional summaries.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
