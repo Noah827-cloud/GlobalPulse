@@ -11,7 +11,7 @@ import SettingsModal from './components/SettingsModal';
 const App: React.FC = () => {
   // 初始加载
   const [allArticles, setAllArticles] = useState<NewsArticle[]>(() => {
-    const saved = localStorage.getItem('global_news_db');
+    const saved = localStorage.getItem('global_news_db_v3'); // Invalidate v2 cache to clear bad IDs
     if (!saved) return [];
     try {
       return JSON.parse(saved) as NewsArticle[];
@@ -109,7 +109,7 @@ const App: React.FC = () => {
             .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
             .slice(0, 500); // 限制最大条数
 
-          localStorage.setItem('global_news_db', JSON.stringify(updated));
+          localStorage.setItem('global_news_db_v3', JSON.stringify(updated));
           return updated;
         });
 

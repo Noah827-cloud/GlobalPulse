@@ -14,26 +14,31 @@ const RSS_SOURCES: Record<string, string[]> = {
     'https://feeds.bbci.co.uk/news/world/rss.xml',
     'http://edition.cnn.com/services/rss/edition_world.rss',
     'https://feeds.skynews.com/feeds/rss/world.xml',
+    'https://www.theguardian.com/world/rss', // The Guardian (Backup for Sky)
     'https://www.chinanews.com.cn/rss/world.xml', // 中新网国际 (Confirmed Active)
     'https://www.chinanews.com.cn/rss/scroll-news.xml' // 中新网滚动
   ],
   [NewsCategory.FINANCE]: [
     'https://finance.yahoo.com/news/rssindex',
-    'https://www.investing.com/rss/news.rss', // Investing.com (Confirmed Active)
-    'https://www.chinanews.com.cn/rss/finance.xml', // 中新网财经
-    'http://www.ftchinese.com/rss/news' // FT中文网
+    'https://www.investing.com/rss/news.rss',
+    'http://a.jiemian.com/index.php?m=article&a=rss', // 界面新闻 (含图片)
+    'https://www.chinanews.com.cn/rss/finance.xml'
   ],
   [NewsCategory.AI]: [
     'https://techcrunch.com/category/artificial-intelligence/feed/',
-    'https://www.theverge.com/ai-artificial-intelligence/rss/index.xml',
-    'https://36kr.com/feed', // 36Kr (Confirmed Active)
-    'https://www.chinanews.com.cn/rss/it.xml' // 中新网IT
+    'http://feeds.arstechnica.com/arstechnica/technology-lab', // Ars Technica (Reliable)
+    'https://www.technologyreview.com/topic/artificial-intelligence/feed', // MIT Tech Review
+    'https://feed.infoq.cn/', // InfoQ CN (High quality tech)
+    'http://a.jiemian.com/index.php?m=article&a=rss', // 界面新闻
+    'https://www.huxiu.com/rss/0.xml', // 虎嗅
+    'https://www.bestblogs.dev/zh/feeds/rss', // BestBlogs (User Requested)
+    'https://www.36kr.com/feed' // 36Kr (User Requested)
   ],
   [NewsCategory.ENTERTAINMENT]: [
     'https://variety.com/feed/',
     'https://www.hollywoodreporter.com/feed/',
-    'https://www.chinanews.com.cn/rss/yl.xml', // 中新网娱乐
-    'https://rss.hub.app/bilibili/ranking/0/3' // Bilibili Ranking via RSSHub (Optional)
+    'https://www.huxiu.com/rss/0.xml', // 虎嗅 (含图片/文化娱乐)
+    'https://www.chinanews.com.cn/rss/yl.xml'
   ]
 };
 
@@ -83,26 +88,30 @@ const parseRSSXML = (xmlText: string, category: NewsCategory, sourceName: string
   const now = new Date();
   const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
 
-  // Filter by Freshness (Last 3 Days) & Limit to 15
-  const items = allItems.filter(item => {
+  // Filter by Freshness (Last 3 Days)
+  const freshItems = allItems.filter(item => {
     const pubDateText = item.querySelector("pubDate")?.textContent;
     if (!pubDateText) return false;
     const pubDate = new Date(pubDateText);
     return pubDate >= threeDaysAgo;
-  }).slice(0, 15);
+  });
 
-  return items.map((item, index) => {
+  // 2. Limit to 6 items per feed to ensure diversity (User requested ~5 per source)
+  return freshItems.slice(0, 6).map((item, index) => {
     const title = item.querySelector("title")?.textContent || "";
     const description = item.querySelector("description")?.textContent || "";
     // Clean CDATA and HTML tags
     const cleanDesc = description.replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1').replace(/<[^>]*>/g, '').slice(0, 200).trim() + "...";
 
-    // Attempt to find image in description or enclosure
+    // Attempt to find image in various locations
     let imageUrl = "";
+
+    // 1. Check <enclosure>
     const enclosure = item.querySelector("enclosure");
     if (enclosure?.getAttribute("type")?.startsWith("image")) {
       imageUrl = enclosure.getAttribute("url") || "";
     }
+
     // 2. Check <media:thumbnail> or <media:content> (Common in BBC, Reuters)
     if (!imageUrl) {
       const media = item.getElementsByTagName("media:thumbnail")[0] || item.getElementsByTagName("media:content")[0];
@@ -115,6 +124,10 @@ const parseRSSXML = (xmlText: string, category: NewsCategory, sourceName: string
       const imgMatch = description.match(/<img[^>]+src=["']([^"']+)["']/i);
       if (imgMatch) imageUrl = imgMatch[1];
     }
+
+    // Fallback image for specific sources if missing
+    if (!imageUrl && sourceName.includes('BBC')) imageUrl = "https://images.unsplash.com/photo-1588681664899-f142ff2dc9b1";
+    if (!imageUrl && sourceName.includes('CNN')) imageUrl = "https://images.unsplash.com/photo-1529243856184-485f960d0877";
 
     const link = item.querySelector("link")?.textContent || "";
     const pubDate = item.querySelector("pubDate")?.textContent || "";
@@ -136,11 +149,29 @@ const fetchFromRSS = async (category: NewsCategory): Promise<NewsArticle[]> => {
 
   const results = await Promise.all(urls.map(async (url) => {
     try {
-      // Use AllOrigins as CORS proxy which is more lenient than rss2json
-      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-      const res = await fetch(proxyUrl);
-      if (!res.ok) return [];
-      const xmlText = await res.text();
+      // Try generic CORS proxies with fallback
+      let xmlText = "";
+      try {
+        const proxyUrl1 = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+        const res1 = await fetch(proxyUrl1, { signal: AbortSignal.timeout(5000) });
+        if (res1.ok) {
+          xmlText = await res1.text();
+        } else {
+          throw new Error("Proxy 1 failed");
+        }
+      } catch (e) {
+        // Fallback to corsproxy.io
+        console.warn(`Proxy 1 failed for ${url}, trying fallback...`);
+        try {
+          const proxyUrl2 = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+          const res2 = await fetch(proxyUrl2, { signal: AbortSignal.timeout(8000) });
+          if (!res2.ok) throw new Error("Proxy 2 failed");
+          xmlText = await res2.text();
+        } catch (e2) {
+          console.error(`All proxies failed for ${url}`, e2);
+          return [];
+        }
+      }
 
       const hostname = new URL(url).hostname.replace('www.', '').toUpperCase();
       const rawItems = parseRSSXML(xmlText, category, hostname);
@@ -151,8 +182,13 @@ const fetchFromRSS = async (category: NewsCategory): Promise<NewsArticle[]> => {
         const tags = extractTagsFallback(combinedText, category);
         if (!tags.includes("RSS（降级）")) tags.push("RSS（降级）");
 
+        // Generate a simplified unique ID that avoids prefix collision issues
+        // We use Math.random() and Date.now() to ensure uniqueness within the session
+        // This solves the 'Duplicate Key' crash caused by slicing base64 common prefixes
+        const safeId = `rss-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${index}`;
+
         return {
-          id: `rss-${btoa(item.link).slice(0, 12)}-${index}`,
+          id: safeId,
           title: item.title,
           summary: item.description,
           source: item.author,
