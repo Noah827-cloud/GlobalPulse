@@ -6,8 +6,18 @@ import { getKeywordLibrary } from "./keywordLibrary";
 
 // Use VITE_API_KEY for client-side, fallback to simple process.env usage but note vite validation might complain
 // To be safe in TS, we use import.meta.env only if available or cast
-const apiKey = import.meta.env.VITE_API_KEY || (process as any).env?.VITE_API_KEY || "";
-const ai = new GoogleGenAI({ apiKey });
+const apiKey = import.meta.env.VITE_API_KEY || "";
+let ai: GoogleGenAI | null = null;
+try {
+  // Only initialize if we have a key, or try with empty string if SDK allows, but catch errors
+  if (apiKey) {
+    ai = new GoogleGenAI({ apiKey });
+  } else {
+    console.warn("Gemini API Key is missing. AI features will be disabled.");
+  }
+} catch (error) {
+  console.error("Failed to initialize GoogleGenAI client:", error);
+}
 
 const RSS_SOURCES: Record<string, string[]> = {
   [NewsCategory.POLITICS]: [
