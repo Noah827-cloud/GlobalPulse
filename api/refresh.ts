@@ -1,6 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { del, list, put } from '@vercel/blob';
-import { JSDOM } from 'jsdom';
 
 const BLOB_PATH = 'feeds/latest.json';
 const NewsCategory = {
@@ -160,6 +159,46 @@ const sanitizeHotlistSummary = (input: string): string => (
     .trim()
 );
 
+const decodeXmlEntities = (input: string): string => (
+  input
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#x2F;/gi, '/')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+);
+
+const stripHtml = (input: string): string => (
+  decodeXmlEntities(input)
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+);
+
+const extractTagText = (input: string, tagName: string): string => {
+  const escaped = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`<${escaped}\\b[^>]*>([\\s\\S]*?)</${escaped}>`, 'i');
+  return decodeXmlEntities(matchFirst(input, pattern));
+};
+
+const extractRssItems = (xmlText: string): string[] => {
+  const itemMatches = Array.from(xmlText.matchAll(/<item\b[\s\S]*?<\/item>/gi)).map((match) => match[0]);
+  if (itemMatches.length > 0) return itemMatches;
+  return Array.from(xmlText.matchAll(/<entry\b[\s\S]*?<\/entry>/gi)).map((match) => match[0]);
+};
+
+const extractLinkFromItemXml = (itemXml: string): string => {
+  const textLink = extractTagText(itemXml, 'link');
+  if (textLink) return textLink;
+
+  const hrefLink = matchFirst(itemXml, /<link\b[^>]*href=["']([^"']+)["'][^>]*\/?>/i);
+  return decodeXmlEntities(hrefLink);
+};
+
 const getHotlistSourcesForCategory = (category: NewsCategory): HotlistSourceConfig[] => (
   HOTLIST_SOURCES.filter((source) => source.category === category)
 );
@@ -209,38 +248,33 @@ const getHotlistSummary = (item: HotlistApiItem): string => {
 };
 
 const parseRSSXML = (xmlText: string, category: NewsCategory, sourceName: string) => {
-  const dom = new JSDOM(xmlText, { contentType: 'text/xml' });
-  const items = Array.from(dom.window.document.querySelectorAll('item')) as Element[];
+  const items = extractRssItems(xmlText);
   const now = Date.now();
   const cutoff = now - 3 * 24 * 60 * 60 * 1000;
 
   return items
     .filter((item) => {
-      const pubDateText = item.querySelector('pubDate')?.textContent || '';
+      const pubDateText = extractTagText(item, 'pubDate') || extractTagText(item, 'updated') || extractTagText(item, 'published');
       const time = new Date(pubDateText).getTime();
       return Number.isFinite(time) && time >= cutoff;
     })
     .slice(0, 6)
     .map((item, index) => {
-      const title = item.querySelector('title')?.textContent || '';
-      const description = item.querySelector('description')?.textContent || '';
-      const cleanSummary = description
-        .replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1')
-        .replace(/<[^>]*>/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 200);
-      const itemXml = item.outerHTML || new dom.window.XMLSerializer().serializeToString(item);
-      const imageUrl = upscaleImageUrl(extractImageUrlFromItemXml(itemXml), category);
+      const title = stripHtml(extractTagText(item, 'title'));
+      const description = extractTagText(item, 'description') || extractTagText(item, 'content:encoded') || extractTagText(item, 'summary') || extractTagText(item, 'content');
+      const cleanSummary = stripHtml(description).slice(0, 200);
+      const imageUrl = upscaleImageUrl(extractImageUrlFromItemXml(item), category);
+      const link = extractLinkFromItemXml(item);
+      const timestamp = extractTagText(item, 'pubDate') || extractTagText(item, 'updated') || extractTagText(item, 'published') || new Date().toISOString();
 
       return {
         id: `rss-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 8)}`,
         title,
         summary: cleanSummary || `${sourceName} RSS`,
         source: sourceName,
-        url: item.querySelector('link')?.textContent || '',
+        url: link,
         category,
-        timestamp: item.querySelector('pubDate')?.textContent || new Date().toISOString(),
+        timestamp,
         imageUrl,
         tags: [category, 'RSS（降级）'],
         syncDate: new Date().toISOString().split('T')[0]
