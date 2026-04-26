@@ -1,13 +1,21 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { del, list, put } from '@vercel/blob';
 import { JSDOM } from 'jsdom';
-import { NewsArticle, NewsCategory } from '../types';
+import type { NewsArticle, NewsCategory as AppNewsCategory } from '../types';
 import { extractImageUrlFromItemXml } from '../rssImageExtraction';
 import { fetchHotlistNewsForCategory } from '../hotlistService';
 import { filterRecentArticles } from '../articleRetention';
 import { filterRemovedSources } from '../sourceCleanup';
 
 const BLOB_PATH = 'feeds/latest.json';
+const NewsCategory = {
+  POLITICS: '时政',
+  FINANCE: '财经',
+  AI: '人工智能',
+  ENTERTAINMENT: '娱乐'
+} as const satisfies Record<string, AppNewsCategory>;
+
+type NewsCategory = AppNewsCategory;
 
 const RSS_SOURCES: Record<string, string[]> = {
   [NewsCategory.POLITICS]: [

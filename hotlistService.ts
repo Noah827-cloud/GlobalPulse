@@ -1,5 +1,14 @@
-import { NewsArticle, NewsCategory } from './types.ts';
+import type { NewsArticle, NewsCategory as AppNewsCategory } from './types';
 import { getAllHotlistSources, getHotlistSourcesForCategoryLabel } from './hotlistSources';
+
+const NewsCategory = {
+  POLITICS: '时政',
+  FINANCE: '财经',
+  AI: '人工智能',
+  ENTERTAINMENT: '娱乐'
+} as const satisfies Record<string, AppNewsCategory>;
+
+type NewsCategory = AppNewsCategory;
 
 type HotlistApiItem = {
   id?: string | number;
