@@ -407,6 +407,7 @@ const App: React.FC = () => {
           </div>
         ) : selectedCategory === NewsCategory.HOTLIST ? (
           <HotlistQueue
+            key={selectedHotlistSource}
             articles={filteredArticles}
             onSelect={setSelectedArticle}
           />

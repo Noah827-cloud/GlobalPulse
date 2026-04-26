@@ -9,15 +9,27 @@ const stripTags = (input: string): string => (
     .trim()
 );
 
+const sanitizeSummary = (input: string): string => (
+  input
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
+    .replace(/!\[[^\]]*\]:?\s*[^\s]+/g, ' ')
+    .replace(/\((https?:\/\/[^)]+)\)/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/Markdown Content:/gi, ' ')
+    .replace(/Title:\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+);
+
 const extractSummary = (html: string): string => {
   const og = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)?.[1];
-  if (og?.trim()) return og.trim();
+  if (og?.trim()) return sanitizeSummary(og.trim());
 
   const desc = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)?.[1];
-  if (desc?.trim()) return desc.trim();
+  if (desc?.trim()) return sanitizeSummary(desc.trim());
 
   const paragraphMatches = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi))
-    .map((match) => stripTags(match[1] || ''))
+    .map((match) => sanitizeSummary(stripTags(match[1] || '')))
     .filter((text) => text.length > 40);
 
   return paragraphMatches[0]?.slice(0, 180) || '';

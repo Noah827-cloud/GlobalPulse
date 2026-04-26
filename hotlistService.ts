@@ -72,18 +72,31 @@ const GENERIC_SUMMARY_PATTERNS = [
   '澎湃，澎湃新闻',
 ];
 
+const sanitizeHotlistSummary = (input: string): string => (
+  input
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
+    .replace(/!\[[^\]]*\]:?\s*[^\s]+/g, ' ')
+    .replace(/\((https?:\/\/[^)]+)\)/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/Markdown Content:/gi, ' ')
+    .replace(/Title:\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+);
+
 const getHotlistSummary = (sourceName: string, item: HotlistApiItem): string => {
   const hover = item.extra?.hover?.trim();
   if (hover) {
-    return hover.slice(0, 120);
+    return sanitizeHotlistSummary(hover).slice(0, 120);
   }
 
   return '';
 };
 
 export const hasMeaningfulHotlistSummary = (summary: string): boolean => {
-  const trimmed = summary.trim();
+  const trimmed = sanitizeHotlistSummary(summary);
   if (!trimmed) return false;
+  if (trimmed.startsWith('[') || trimmed.startsWith('![')) return false;
   return !GENERIC_SUMMARY_PATTERNS.some((pattern) => trimmed.includes(pattern));
 };
 
@@ -98,7 +111,7 @@ const fetchDetailSummary = async (url: string): Promise<string> => {
       throw new Error(`Summary proxy failed: ${response.status}`);
     }
     const data = await response.json() as { summary?: string };
-    return (data.summary || '').trim();
+    return sanitizeHotlistSummary((data.summary || '').trim());
   }
 
   const proxyUrl = `https://r.jina.ai/http://${url.replace(/^https?:\/\//, '')}`;
@@ -116,7 +129,7 @@ const fetchDetailSummary = async (url: string): Promise<string> => {
     .map((line) => line.trim())
     .find((line) => line.length > 40 && !line.startsWith('{') && !line.startsWith('Title:'));
 
-  return candidate?.slice(0, 180) || '';
+  return sanitizeHotlistSummary(candidate?.slice(0, 180) || '');
 };
 
 const fetchHotlistPayload = async (sourceId: string): Promise<HotlistApiResponse> => {
