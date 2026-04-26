@@ -26,6 +26,9 @@ type CategorySyncReport = {
   totalCount: number;
   errors: string[];
 };
+
+const useServerFeed = typeof window !== 'undefined' && window.location.hostname !== 'localhost';
+
 const App: React.FC = () => {
   // 初始加载
   const [allArticles, setAllArticles] = useState<NewsArticle[]>(() => {
@@ -120,6 +123,26 @@ const App: React.FC = () => {
     ];
 
     try {
+      if (useServerFeed) {
+        const response = await fetch('/api/refresh', { method: 'GET' });
+        if (!response.ok) {
+          throw new Error(`Server refresh failed: ${response.status}`);
+        }
+
+        const payload = await response.json() as {
+          articles: NewsArticle[];
+          lastSyncTime: string;
+          syncFeedback: SyncFeedbackState;
+        };
+
+        setAllArticles(payload.articles);
+        setLastSyncTime(payload.lastSyncTime);
+        localStorage.setItem('global_news_db_v3', JSON.stringify(payload.articles));
+        localStorage.setItem('last_sync_full', payload.lastSyncTime);
+        setSyncFeedback(payload.syncFeedback);
+        return;
+      }
+
       const newlyFetched: NewsArticle[] = [];
       const reports: CategorySyncReport[] = [];
       for (const cat of categoriesToSync) {
@@ -244,6 +267,26 @@ const App: React.FC = () => {
 
   // 初始化启动
   useEffect(() => {
+    if (useServerFeed) {
+      fetch('/api/feed')
+        .then(async (response) => {
+          if (!response.ok) return null;
+          return response.json() as Promise<{ articles: NewsArticle[]; lastSyncTime: string; syncFeedback?: SyncFeedbackState }>;
+        })
+        .then((payload) => {
+          if (!payload) return;
+          setAllArticles(payload.articles || []);
+          setLastSyncTime(payload.lastSyncTime || null);
+          if (payload.syncFeedback) setSyncFeedback(payload.syncFeedback);
+          localStorage.setItem('global_news_db_v3', JSON.stringify(payload.articles || []));
+          if (payload.lastSyncTime) localStorage.setItem('last_sync_full', payload.lastSyncTime);
+        })
+        .catch(() => {
+          if (allArticles.length === 0) performFullSync(true);
+        });
+      return;
+    }
+
     if (allArticles.length === 0) {
       performFullSync(true);
     }
