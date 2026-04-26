@@ -2,12 +2,29 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { NewsArticle, NewsCategory } from './types';
 import { syncNewsForCategory } from './geminiService';
+import { shouldRunScheduledSync } from './schedule';
+import { filterRecentArticles } from './articleRetention';
+import { fetchHotlistNewsForCategory, getAllHotlistSourceConfigs } from './hotlistService';
+import { filterRemovedSources } from './sourceCleanup';
 import NewsCard from './components/NewsCard';
 import ArticleModal from './components/ArticleModal';
 import ConfirmModal from './components/ConfirmModal';
 import KeywordBar from './components/KeywordBar';
 import SettingsModal from './components/SettingsModal';
 
+type SyncFeedbackState = {
+  status: 'idle' | 'running' | 'success' | 'error';
+  summary: string | null;
+  details: string[];
+};
+
+type CategorySyncReport = {
+  category: NewsCategory;
+  rssCount: number;
+  hotlistCount: number;
+  totalCount: number;
+  errors: string[];
+};
 const App: React.FC = () => {
   // 初始加载
   const [allArticles, setAllArticles] = useState<NewsArticle[]>(() => {
@@ -23,8 +40,15 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<NewsCategory>(NewsCategory.ALL);
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
+  const [selectedHotlistSource, setSelectedHotlistSource] = useState<string>('weibo');
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(localStorage.getItem('last_sync_full'));
+  const [lastAutoSyncAt, setLastAutoSyncAt] = useState<string | null>(localStorage.getItem('last_auto_sync_at'));
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<SyncFeedbackState>({
+    status: 'idle',
+    summary: null,
+    details: []
+  });
 
   // New State for Feature 002
   const [selectedKeyword, setSelectedKeyword] = useState<string | null>(null);
@@ -36,6 +60,10 @@ const App: React.FC = () => {
       new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
 
+    if (selectedCategory === NewsCategory.HOTLIST) {
+      return sorted.filter((a) => a.id.startsWith('hot-') && a.source === getAllHotlistSourceConfigs().find((source) => source.id === selectedHotlistSource)?.name);
+    }
+
     if (selectedCategory === NewsCategory.ALL) {
       return sorted;
     }
@@ -44,7 +72,7 @@ const App: React.FC = () => {
       return (a.category || '').trim() === (selectedCategory || '').trim();
     });
     return filtered;
-  }, [allArticles, selectedCategory]);
+  }, [allArticles, selectedCategory, selectedHotlistSource]);
 
   // 1.5 过滤逻辑优化：关键字筛选 (FR-005)
   const filteredArticles = useMemo(() => {
@@ -76,6 +104,11 @@ const App: React.FC = () => {
   // 2. 同步逻辑
   const performFullSync = useCallback(async (isManual: boolean = false) => {
     setLoading(true);
+    setSyncFeedback({
+      status: 'running',
+      summary: '正在通过 RSS 同步新闻...',
+      details: []
+    });
     console.log("Starting sync...");
 
     const categoriesToSync = [
@@ -87,23 +120,43 @@ const App: React.FC = () => {
 
     try {
       const newlyFetched: NewsArticle[] = [];
+      const reports: CategorySyncReport[] = [];
       for (const cat of categoriesToSync) {
         try {
-          const result = await syncNewsForCategory(cat);
-          const calibrated = result.map(a => ({ ...a, category: cat }));
+          const [rssResult, hotlistResult] = await Promise.all([
+            syncNewsForCategory(cat),
+            fetchHotlistNewsForCategory(cat)
+          ]);
+          const combined = [...rssResult, ...hotlistResult.articles];
+          const calibrated = combined.map(a => ({ ...a, category: cat }));
           newlyFetched.push(...calibrated);
+          reports.push({
+            category: cat,
+            rssCount: rssResult.length,
+            hotlistCount: hotlistResult.articles.length,
+            totalCount: combined.length,
+            errors: hotlistResult.errors
+          });
         } catch (e) {
           console.error(`Syncing ${cat} failed`, e);
+          reports.push({
+            category: cat,
+            rssCount: 0,
+            hotlistCount: 0,
+            totalCount: 0,
+            errors: [e instanceof Error ? e.message : '未知错误']
+          });
         }
       }
 
       if (newlyFetched.length > 0) {
         setAllArticles(prev => {
           const articleMap = new Map<string, NewsArticle>();
+          const recentPrev = filterRemovedSources(filterRecentArticles(prev));
           // 保留旧数据，但如果是手动刷新，可能希望更积极地更新
           // 这里策略：用 URL 做唯一键，新的覆盖旧的
-          prev.forEach(a => { if (a.url) articleMap.set(a.url, a) });
-          newlyFetched.forEach(a => { if (a.url) articleMap.set(a.url, a) });
+          recentPrev.forEach(a => { if (a.url) articleMap.set(a.url, a) });
+          filterRemovedSources(filterRecentArticles(newlyFetched)).forEach(a => { if (a.url) articleMap.set(a.url, a) });
 
           const updated = Array.from(articleMap.values())
             .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -116,9 +169,37 @@ const App: React.FC = () => {
         const now = new Date().toLocaleString();
         setLastSyncTime(now);
         localStorage.setItem('last_sync_full', now);
+        const categoryReports = reports;
+        const zeroHotlist = categoryReports.filter((report) => report.hotlistCount === 0 && report.category !== NewsCategory.AI);
+        const zeroRss = categoryReports.filter((report) => report.rssCount === 0);
+        setSyncFeedback({
+          status: zeroHotlist.length > 0 || zeroRss.length > 0 ? 'error' : 'success',
+          summary: `同步完成，共抓取 ${newlyFetched.length} 条内容。`,
+          details: categoryReports.map((report) => {
+            const warnings = [];
+            if (report.rssCount === 0) warnings.push('RSS=0');
+            if (report.hotlistCount === 0 && report.category !== NewsCategory.AI) warnings.push('Hotlist=0');
+            if (report.errors.length > 0) {
+              warnings.push(...report.errors);
+            }
+            const suffix = warnings.length > 0 ? `，异常: ${warnings.join(' | ')}` : '';
+            return `${report.category}：RSS ${report.rssCount} 条，Hotlist ${report.hotlistCount} 条，合计 ${report.totalCount} 条${suffix}`;
+          })
+        });
+      } else {
+        setSyncFeedback({
+          status: 'error',
+          summary: '同步失败，RSS 和 Hotlist 都没有拿到内容。',
+          details: ['请检查当前网络是否能访问 RSS 代理服务，以及 newsnow 热榜 API。']
+        });
       }
     } catch (error) {
       console.error("Critical sync error:", error);
+      setSyncFeedback({
+        status: 'error',
+        summary: '同步异常中断。',
+        details: [error instanceof Error ? error.message : '未知错误']
+      });
     } finally {
       setLoading(false);
     }
@@ -145,14 +226,20 @@ const App: React.FC = () => {
   // 4. 定时任务
   useEffect(() => {
     const interval = setInterval(() => {
+      if (loading) {
+        return;
+      }
+
       const now = new Date();
-      const hm = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-      if (["08:00", "15:00"].includes(hm)) {
+      if (shouldRunScheduledSync(now, lastAutoSyncAt)) {
+        const executedAt = now.toISOString();
+        setLastAutoSyncAt(executedAt);
+        localStorage.setItem('last_auto_sync_at', executedAt);
         performFullSync();
       }
     }, 60000);
     return () => clearInterval(interval);
-  }, [performFullSync]);
+  }, [loading, performFullSync, lastAutoSyncAt]);
 
   // 初始化启动
   useEffect(() => {
@@ -257,16 +344,48 @@ const App: React.FC = () => {
                 通过筛选: {filteredArticles.length} / 总计: {categoryArticles.length}
               </span>
             </div>
+            {syncFeedback.summary && (
+              <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm ${
+                syncFeedback.status === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                  : syncFeedback.status === 'error'
+                    ? 'bg-red-50 border-red-200 text-red-700'
+                    : 'bg-slate-50 border-slate-200 text-slate-600'
+              }`}>
+                <p className="font-semibold">{syncFeedback.summary}</p>
+                {syncFeedback.details.map((detail) => (
+                  <p key={detail} className="mt-1 opacity-90">{detail}</p>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
         {/* Keyword Bar Component */}
-        <KeywordBar
-          articles={categoryArticles} // Use un-filtered list to calculate trends
-          selectedKeyword={selectedKeyword}
-          onSelectKeyword={setSelectedKeyword}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-        />
+        {selectedCategory === NewsCategory.HOTLIST ? (
+          <div className="flex gap-2.5 mb-8 overflow-x-auto no-scrollbar">
+            {getAllHotlistSourceConfigs().map((source) => (
+              <button
+                key={source.id}
+                onClick={() => setSelectedHotlistSource(source.id)}
+                className={`flex-shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all border ${
+                  selectedHotlistSource === source.id
+                    ? 'bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-200'
+                    : 'bg-white border-slate-200 text-slate-500 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50'
+                }`}
+              >
+                {source.name}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <KeywordBar
+            articles={categoryArticles}
+            selectedKeyword={selectedKeyword}
+            onSelectKeyword={setSelectedKeyword}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+          />
+        )}
 
         {filteredArticles.length === 0 ? (
           <div className="py-32 text-center bg-white rounded-[3rem] border border-dashed border-slate-200">
@@ -274,7 +393,7 @@ const App: React.FC = () => {
               <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-slate-200" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" /></svg>
             </div>
             <h3 className="text-xl font-bold text-slate-400 uppercase">
-              {selectedKeyword ? `没有找到关于 "${selectedKeyword}" 的结果` : loading ? 'AI 正在检索全球数据库...' : `暂无「${selectedCategory}」数据`}
+              {selectedKeyword ? `没有找到关于 "${selectedKeyword}" 的结果` : loading ? '正在同步内容...' : `暂无「${selectedCategory}」数据`}
             </h3>
             {!loading && (
               <button

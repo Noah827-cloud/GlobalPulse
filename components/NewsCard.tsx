@@ -10,6 +10,22 @@ interface NewsCardProps {
 
 const NewsCard: React.FC<NewsCardProps> = ({ article, onClick, onTagClick }) => {
   const [imgLoaded, setImgLoaded] = useState(false);
+  const [imgSrc, setImgSrc] = useState(article.imageUrl);
+
+  const fallbackImage = (() => {
+    switch (article.category) {
+      case '时政':
+        return '/fallback/politics.jpg';
+      case '财经':
+        return '/fallback/finance.jpg';
+      case '人工智能':
+        return '/fallback/ai.jpg';
+      case '娱乐':
+        return '/fallback/entertainment.jpg';
+      default:
+        return '/fallback/general.jpg';
+    }
+  })();
 
   const handleTagClick = (e: React.MouseEvent, tag: string) => {
     e.stopPropagation(); // Prevent card click
@@ -33,9 +49,15 @@ const NewsCard: React.FC<NewsCardProps> = ({ article, onClick, onTagClick }) => 
           <div className="absolute inset-0 animate-pulse bg-slate-200" />
         )}
         <img
-          src={article.imageUrl}
+          src={imgSrc}
           alt={article.title}
           onLoad={() => setImgLoaded(true)}
+          onError={() => {
+            if (imgSrc !== fallbackImage) {
+              setImgLoaded(false);
+              setImgSrc(fallbackImage);
+            }
+          }}
           className={`w-full h-full object-cover transition-all duration-700 ease-out group-hover:scale-110 ${imgLoaded ? 'opacity-100' : 'opacity-0'}`}
           style={{ imageRendering: '-webkit-optimize-contrast' }}
         />

@@ -5,6 +5,7 @@ export enum NewsCategory {
   FINANCE = '财经',
   AI = '人工智能',
   ENTERTAINMENT = '娱乐',
+  HOTLIST = '今日热榜',
   CUSTOM = '定制'
 }
 
