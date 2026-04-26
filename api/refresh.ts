@@ -177,7 +177,6 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
 
     await put(BLOB_PATH, JSON.stringify(payload), {
       addRandomSuffix: false,
-      allowOverwrite: true,
       contentType: 'application/json'
     });
 
