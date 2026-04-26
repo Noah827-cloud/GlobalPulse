@@ -7,6 +7,7 @@ import { filterRecentArticles } from './articleRetention';
 import { fetchHotlistNewsForCategory, getAllHotlistSourceConfigs } from './hotlistService';
 import { filterRemovedSources } from './sourceCleanup';
 import NewsCard from './components/NewsCard';
+import HotlistQueue from './components/HotlistQueue';
 import ArticleModal from './components/ArticleModal';
 import ConfirmModal from './components/ConfirmModal';
 import KeywordBar from './components/KeywordBar';
@@ -65,11 +66,11 @@ const App: React.FC = () => {
     }
 
     if (selectedCategory === NewsCategory.ALL) {
-      return sorted;
+      return sorted.filter((a) => !a.id.startsWith('hot-'));
     }
 
     const filtered = sorted.filter(a => {
-      return (a.category || '').trim() === (selectedCategory || '').trim();
+      return !a.id.startsWith('hot-') && (a.category || '').trim() === (selectedCategory || '').trim();
     });
     return filtered;
   }, [allArticles, selectedCategory, selectedHotlistSource]);
@@ -404,6 +405,11 @@ const App: React.FC = () => {
               </button>
             )}
           </div>
+        ) : selectedCategory === NewsCategory.HOTLIST ? (
+          <HotlistQueue
+            articles={filteredArticles}
+            onSelect={setSelectedArticle}
+          />
         ) : (
           <div key={selectedCategory} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 animate-in fade-in duration-500">
             {filteredArticles.map(article => (
