@@ -59,12 +59,29 @@ export const getHotlistSourceImage = (sourceId: string, category: NewsCategory):
 
 const fetchHotlistPayload = async (sourceId: string): Promise<HotlistApiResponse> => {
   const targetUrl = `https://newsnow.busiyi.world/api/s?id=${sourceId}&latest`;
+  const useLocalProxy = typeof window !== 'undefined' && window.location.hostname !== 'localhost';
   const proxyUrls = [
     `https://r.jina.ai/http://newsnow.busiyi.world/api/s?id=${sourceId}&latest`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
   ];
 
   let lastError: Error | null = null;
+
+  if (useLocalProxy) {
+    try {
+      const response = await fetch(`/api/hotlist?id=${encodeURIComponent(sourceId)}`, {
+        signal: AbortSignal.timeout(12000)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Local hotlist proxy failed: ${response.status}`);
+      }
+
+      return await response.json() as HotlistApiResponse;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('未知错误');
+    }
+  }
 
   for (const proxyUrl of proxyUrls) {
     try {

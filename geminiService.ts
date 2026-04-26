@@ -127,30 +127,42 @@ const parseRSSXML = (xmlText: string, category: NewsCategory, sourceName: string
 const fetchFromRSS = async (category: NewsCategory): Promise<NewsArticle[]> => {
   const urls = RSS_SOURCES[category] || [];
   const today = new Date().toISOString().split('T')[0];
+  const useLocalProxy = typeof window !== 'undefined' && window.location.hostname !== 'localhost';
 
   const results = await Promise.all(urls.map(async (url) => {
     try {
-      // Try generic CORS proxies with fallback
       let xmlText = "";
-      try {
-        const proxyUrl1 = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-        const res1 = await fetch(proxyUrl1, { signal: AbortSignal.timeout(5000) });
-        if (res1.ok) {
-          xmlText = await res1.text();
-        } else {
-          throw new Error("Proxy 1 failed");
-        }
-      } catch (e) {
-        // Fallback to corsproxy.io
-        console.warn(`Proxy 1 failed for ${url}, trying fallback...`);
+
+      if (useLocalProxy) {
         try {
-          const proxyUrl2 = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-          const res2 = await fetch(proxyUrl2, { signal: AbortSignal.timeout(8000) });
-          if (!res2.ok) throw new Error("Proxy 2 failed");
-          xmlText = await res2.text();
-        } catch (e2) {
-          console.error(`All proxies failed for ${url}`, e2);
-          return [];
+          const res = await fetch(`/api/rss?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(12000) });
+          if (!res.ok) throw new Error(`Local RSS proxy failed: ${res.status}`);
+          xmlText = await res.text();
+        } catch (e) {
+          console.warn(`Local RSS proxy failed for ${url}, falling back to public proxies...`, e);
+        }
+      }
+
+      if (!xmlText) {
+        try {
+          const proxyUrl1 = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+          const res1 = await fetch(proxyUrl1, { signal: AbortSignal.timeout(5000) });
+          if (res1.ok) {
+            xmlText = await res1.text();
+          } else {
+            throw new Error("Proxy 1 failed");
+          }
+        } catch (e) {
+          console.warn(`Proxy 1 failed for ${url}, trying fallback...`);
+          try {
+            const proxyUrl2 = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+            const res2 = await fetch(proxyUrl2, { signal: AbortSignal.timeout(8000) });
+            if (!res2.ok) throw new Error("Proxy 2 failed");
+            xmlText = await res2.text();
+          } catch (e2) {
+            console.error(`All proxies failed for ${url}`, e2);
+            return [];
+          }
         }
       }
 
