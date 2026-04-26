@@ -65,7 +65,7 @@ const upscaleImageUrl = (url: string, category: NewsCategory): string => {
 
 const parseRSSXML = (xmlText: string, category: NewsCategory, sourceName: string) => {
   const dom = new JSDOM(xmlText, { contentType: 'text/xml' });
-  const items = Array.from(dom.window.document.querySelectorAll('item'));
+  const items = Array.from(dom.window.document.querySelectorAll('item')) as Element[];
   const now = Date.now();
   const cutoff = now - 3 * 24 * 60 * 60 * 1000;
 
@@ -85,7 +85,7 @@ const parseRSSXML = (xmlText: string, category: NewsCategory, sourceName: string
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 200);
-      const itemXml = item.outerHTML || dom.window.XMLSerializer ? new dom.window.XMLSerializer().serializeToString(item) : '';
+      const itemXml = item.outerHTML || new dom.window.XMLSerializer().serializeToString(item);
       const imageUrl = upscaleImageUrl(extractImageUrlFromItemXml(itemXml), category);
 
       return {
@@ -176,7 +176,6 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
     };
 
     await put(BLOB_PATH, JSON.stringify(payload), {
-      access: 'private',
       addRandomSuffix: false,
       allowOverwrite: true,
       contentType: 'application/json'
