@@ -1,11 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { del, list, put } from '@vercel/blob';
 import { JSDOM } from 'jsdom';
-import type { NewsArticle, NewsCategory as AppNewsCategory } from '../types';
-import { extractImageUrlFromItemXml } from '../rssImageExtraction';
-import { fetchHotlistNewsForCategory } from '../hotlistService';
-import { filterRecentArticles } from '../articleRetention';
-import { filterRemovedSources } from '../sourceCleanup';
 
 const BLOB_PATH = 'feeds/latest.json';
 const NewsCategory = {
@@ -13,9 +8,51 @@ const NewsCategory = {
   FINANCE: '财经',
   AI: '人工智能',
   ENTERTAINMENT: '娱乐'
-} as const satisfies Record<string, AppNewsCategory>;
+} as const;
 
-type NewsCategory = AppNewsCategory;
+type NewsCategory = typeof NewsCategory[keyof typeof NewsCategory];
+
+type NewsArticle = {
+  id: string;
+  title: string;
+  summary: string;
+  category: NewsCategory;
+  source: string;
+  url: string;
+  timestamp: string;
+  imageUrl: string;
+  tags: string[];
+  syncDate: string;
+};
+
+type HotlistApiItem = {
+  id?: string | number;
+  title?: string;
+  url?: string;
+  mobileUrl?: string;
+  extra?: {
+    hover?: string;
+    icon?: {
+      url?: string;
+    };
+  };
+};
+
+type HotlistApiResponse = {
+  updatedTime?: number;
+  items?: HotlistApiItem[];
+};
+
+type HotlistFetchResult = {
+  articles: NewsArticle[];
+  errors: string[];
+};
+
+type HotlistSourceConfig = {
+  id: string;
+  name: string;
+  category: NewsCategory;
+};
 
 const RSS_SOURCES: Record<string, string[]> = {
   [NewsCategory.POLITICS]: [
@@ -49,6 +86,84 @@ const RSS_SOURCES: Record<string, string[]> = {
   ]
 };
 
+const HOTLIST_SOURCES: HotlistSourceConfig[] = [
+  { id: 'weibo', name: '微博热搜', category: NewsCategory.ENTERTAINMENT },
+  { id: 'baidu', name: '百度热搜', category: NewsCategory.POLITICS },
+  { id: 'wallstreetcn-hot', name: '华尔街见闻', category: NewsCategory.FINANCE },
+  { id: 'thepaper', name: '澎湃新闻', category: NewsCategory.POLITICS },
+  { id: 'cls-hot', name: '财联社热门', category: NewsCategory.FINANCE },
+  { id: 'bilibili-hot-search', name: 'Bilibili 热搜', category: NewsCategory.ENTERTAINMENT }
+];
+
+const REMOVED_SOURCE_PATTERNS = [
+  'CHINANEWS.COM.CN',
+  'CHINANEWS',
+  '中新'
+];
+
+const MAX_ARTICLE_AGE_DAYS = 3;
+
+const matchFirst = (input: string, pattern: RegExp): string => {
+  const match = input.match(pattern);
+  return match?.[1]?.trim() ?? '';
+};
+
+const extractImageUrlFromItemXml = (itemXml: string): string => {
+  const patterns = [
+    /<enclosure\b[^>]*type=["'][^"']*image[^"']*["'][^>]*url=["']([^"']+)["'][^>]*>/i,
+    /<enclosure\b[^>]*url=["']([^"']+)["'][^>]*type=["'][^"']*image[^"']*["'][^>]*>/i,
+    /<media:thumbnail\b[^>]*url=["']([^"']+)["'][^>]*>/i,
+    /<media:content\b[^>]*url=["']([^"']+)["'][^>]*>/i,
+    /<itunes:image\b[^>]*href=["']([^"']+)["'][^>]*>/i,
+    /<content:encoded\b[^>]*>[\s\S]*?<img[^>]+src=["']([^"']+)["']/i,
+    /<description\b[^>]*>[\s\S]*?<img[^>]+src=["']([^"']+)["']/i,
+    /<img[^>]+src=["']([^"']+)["']/i,
+  ];
+
+  for (const pattern of patterns) {
+    const url = matchFirst(itemXml, pattern);
+    if (url) return url;
+  }
+
+  return '';
+};
+
+const filterRecentArticles = (
+  articles: NewsArticle[],
+  now: Date = new Date(),
+  maxAgeDays: number = MAX_ARTICLE_AGE_DAYS
+): NewsArticle[] => {
+  const cutoff = now.getTime() - maxAgeDays * 24 * 60 * 60 * 1000;
+
+  return articles.filter((article) => {
+    const timestamp = new Date(article.timestamp).getTime();
+    return Number.isFinite(timestamp) && timestamp >= cutoff;
+  });
+};
+
+const filterRemovedSources = (articles: NewsArticle[]): NewsArticle[] => (
+  articles.filter((article) => {
+    const source = `${article.source || ''} ${article.url || ''}`.toUpperCase();
+    return !REMOVED_SOURCE_PATTERNS.some((pattern) => source.includes(pattern));
+  })
+);
+
+const sanitizeHotlistSummary = (input: string): string => (
+  input
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
+    .replace(/!\[[^\]]*\]:?\s*[^\s]+/g, ' ')
+    .replace(/\((https?:\/\/[^)]+)\)/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/Markdown Content:/gi, ' ')
+    .replace(/Title:\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+);
+
+const getHotlistSourcesForCategory = (category: NewsCategory): HotlistSourceConfig[] => (
+  HOTLIST_SOURCES.filter((source) => source.category === category)
+);
+
 const getFallbackImage = (category: NewsCategory): string => {
   switch (category) {
     case NewsCategory.POLITICS:
@@ -69,6 +184,28 @@ const upscaleImageUrl = (url: string, category: NewsCategory): string => {
   if (url.includes('ichef.bbci.co.uk')) return url.replace(/\/(news|cps)\/\d+\//, '/$1/1024/');
   if (url.includes('techcrunch.com')) return `${url.split('?')[0]}?w=1024`;
   return url;
+};
+
+const getHotlistSourceImage = (sourceId: string, category: NewsCategory): string => {
+  switch (sourceId) {
+    case 'weibo':
+      return 'https://simg.s.weibo.com/moter/flags/1_0.png';
+    case 'bilibili-hot-search':
+      return '/fallback/entertainment.jpg';
+    case 'wallstreetcn-hot':
+    case 'cls-hot':
+      return '/fallback/finance.jpg';
+    case 'baidu':
+    case 'thepaper':
+      return '/fallback/politics.jpg';
+    default:
+      return getFallbackImage(category);
+  }
+};
+
+const getHotlistSummary = (item: HotlistApiItem): string => {
+  const hover = item.extra?.hover?.trim();
+  return hover ? sanitizeHotlistSummary(hover).slice(0, 120) : '';
 };
 
 const parseRSSXML = (xmlText: string, category: NewsCategory, sourceName: string) => {
@@ -131,6 +268,87 @@ const fetchRssCategory = async (category: NewsCategory): Promise<NewsArticle[]> 
   }));
 
   return results.flat();
+};
+
+const fetchHotlistPayload = async (sourceId: string): Promise<HotlistApiResponse> => {
+  const targetUrl = `https://newsnow.busiyi.world/api/s?id=${sourceId}&latest`;
+  const proxyUrls = [
+    targetUrl,
+    `https://r.jina.ai/http://newsnow.busiyi.world/api/s?id=${sourceId}&latest`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
+  ];
+
+  let lastError: Error | null = null;
+
+  for (const proxyUrl of proxyUrls) {
+    try {
+      const response = await fetch(proxyUrl, {
+        headers: {
+          accept: 'application/json,text/plain,*/*',
+          'user-agent': 'Mozilla/5.0 (compatible; GlobalPulse/1.0; +https://vercel.com)',
+          referer: 'https://newsnow.busiyi.world/',
+          origin: 'https://newsnow.busiyi.world'
+        },
+        signal: AbortSignal.timeout(proxyUrl.includes('allorigins') ? 35000 : 12000)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Hotlist proxy failed: ${response.status}`);
+      }
+
+      const text = await response.text();
+      const jsonStart = text.indexOf('{"status"');
+      const payload = jsonStart >= 0 ? text.slice(jsonStart) : text;
+      return JSON.parse(payload) as HotlistApiResponse;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('未知错误');
+    }
+  }
+
+  throw lastError ?? new Error('Hotlist proxy failed');
+};
+
+const mapHotlistItems = (
+  items: HotlistApiItem[],
+  source: HotlistSourceConfig,
+  category: NewsCategory,
+  today: string,
+  updatedTime: string
+): NewsArticle[] => (
+  items
+    .slice(0, 10)
+    .map((item, index) => ({
+      id: `hot-${source.id}-${String(item.id ?? index)}`,
+      title: String(item.title || '').trim(),
+      summary: getHotlistSummary(item),
+      category,
+      source: source.name,
+      url: item.mobileUrl || item.url || '#',
+      timestamp: updatedTime,
+      imageUrl: item.extra?.icon?.url || getHotlistSourceImage(source.id, category),
+      tags: [category, '国内热点', source.name],
+      syncDate: today
+    }))
+    .filter((item) => item.title && item.url && item.url !== '#')
+);
+
+const fetchHotlistNewsForCategory = async (category: NewsCategory): Promise<HotlistFetchResult> => {
+  const today = new Date().toISOString().split('T')[0];
+  const sources = getHotlistSourcesForCategory(category);
+  const errors: string[] = [];
+  const articles: NewsArticle[] = [];
+
+  for (const source of sources) {
+    try {
+      const data = await fetchHotlistPayload(source.id);
+      const updatedTime = data.updatedTime ? new Date(data.updatedTime).toISOString() : new Date().toISOString();
+      articles.push(...mapHotlistItems(data.items || [], source, category, today, updatedTime));
+    } catch (error) {
+      errors.push(`${source.name}: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  }
+
+  return { articles, errors };
 };
 
 export default async function handler(_req: VercelRequest, res: VercelResponse) {
