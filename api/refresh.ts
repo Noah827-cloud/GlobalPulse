@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { put } from '@vercel/blob';
+import { del, list, put } from '@vercel/blob';
 import { JSDOM } from 'jsdom';
 import { NewsArticle, NewsCategory } from '../types';
 import { extractImageUrlFromItemXml } from '../rssImageExtraction';
@@ -175,7 +175,17 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
       }
     };
 
+    const existing = await list({ prefix: BLOB_PATH, limit: 10 });
+    const staleUrls = existing.blobs
+      .filter((blob) => blob.pathname === BLOB_PATH)
+      .map((blob) => blob.url);
+
+    if (staleUrls.length > 0) {
+      await del(staleUrls);
+    }
+
     await put(BLOB_PATH, JSON.stringify(payload), {
+      access: 'public',
       addRandomSuffix: false,
       contentType: 'application/json'
     });
