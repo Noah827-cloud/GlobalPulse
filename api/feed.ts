@@ -1,7 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { get } from '@vercel/blob';
-
-const BLOB_PATH = 'feeds/latest.json';
+import { BLOB_PATH } from './_lib/shared.js';
 
 export default async function handler(_req: VercelRequest, res: VercelResponse) {
   try {

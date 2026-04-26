@@ -13,7 +13,6 @@
     "@vercel/blob": "^2.3.3",
     "@vercel/node": "^5.3.8",
     "dotenv": "^17.2.3",
-    "jsdom": "^27.4.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
   },
