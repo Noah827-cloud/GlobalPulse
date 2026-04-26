@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { del, list, put } from '@vercel/blob';
+import { put } from '@vercel/blob';
 
 const BLOB_PATH = 'feeds/latest.json';
 const NewsCategory = {
@@ -435,17 +435,9 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
       }
     };
 
-    const existing = await list({ prefix: BLOB_PATH, limit: 10 });
-    const staleUrls = existing.blobs
-      .filter((blob) => blob.pathname === BLOB_PATH)
-      .map((blob) => blob.url);
-
-    if (staleUrls.length > 0) {
-      await del(staleUrls);
-    }
-
     await put(BLOB_PATH, JSON.stringify(payload), {
-      access: 'public',
+      access: 'private',
+      allowOverwrite: true,
       addRandomSuffix: false,
       contentType: 'application/json'
     });
